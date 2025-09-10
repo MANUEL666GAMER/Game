@@ -1,0 +1,68 @@
+name: Notificar a Discord
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    types: [opened, closed, reopened, synchronize]
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enviar notificación de PUSH
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          msg=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg actor "${{ github.actor }}" \
+            --arg sha "${{ github.sha }}" \
+            --arg msg "${{ github.event.head_commit.message }}" \
+            --arg url "https://github.com/${{ github.repository }}/commit/${{ github.sha }}" \
+            '{username:"GitHub Bot", content:"📦 **Push** en \($repo) por \($actor)\n`" + $sha[0:7] + "` - \($msg)\n<\($url)>"}')
+          curl -sS -H "Content-Type: application/json" \
+               -d "$msg" \
+               "${{ secrets.DISCORD_WEBHOOK_URL }}"
+
+      - name: Enviar notificación de PR
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          title="${{ github.event.pull_request.title }}"
+          number="${{ github.event.pull_request.number }}"
+          state="${{ github.event.action }}"
+          url="${{ github.event.pull_request.html_url }}"
+          author="${{ github.event.pull_request.user.login }}"
+          body=$(jq -n --arg t "$title" --arg n "$number" --arg s "$state" --arg u "$url" --arg a "$author" \
+            '{username:"GitHub Bot",
+              embeds:[{
+                title:"🔀 Pull Request #\($n)",
+                description:"**\($t)**",
+                url:$u,
+                fields:[
+                  {name:"Acción", value:$s, inline:true},
+                  {name:"Autor", value:$a, inline:true}
+                ]
+              }]
+            }')
+          curl -sS -H "Content-Type: application/json" -d "$body" "${{ secrets.DISCORD_WEBHOOK_URL }}"
+
+      - name: Enviar notificación de RELEASE
+        if: ${{ github.event_name == 'release' && github.event.action == 'published' }}
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          name="${{ github.event.release.name }}"
+          url="${{ github.event.release.html_url }}"
+          notes="${{ github.event.release.body || 'Sin notas' }}"
+          body=$(jq -n --arg tag "$tag" --arg name "$name" --arg url "$url" --arg notes "$notes" \
+            '{username:"GitHub Bot",
+              embeds:[{
+                title:"🏷️ Nueva release: \($tag)",
+                description:\($name),
+                url:$url,
+                fields:[{name:"Notas", value:(.notes | if length>1024 then (.notes[0:1021] + "...") else .notes end)}]
+              }]
+            }')
+          curl -sS -H "Content-Type: application/json" -d "$body" "${{ secrets.DISCORD_WEBHOOK_URL }}"
